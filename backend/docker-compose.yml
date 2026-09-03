@@ -1,0 +1,115 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-ry-vue}"
+      MYSQL_USER: "${MYSQL_USER:-ruoyi}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-ruoyi-mysql-change-me}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-ruoyi-root-change-me}"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --max-connections=300
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/ry_20260417.sql:/docker-entrypoint-initdb.d/01-ruoyi.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - ruoyi-network
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-ruoyi-redis-change-me}"
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ruoyi-redis-change-me}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - ruoyi-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: "${BACKEND_IMAGE:-ruoyi-backend:local}"
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      SERVER_PORT: "8080"
+      SPRING_PROFILES_ACTIVE: druid
+      SPRING_DEVTOOLS_RESTART_ENABLED: "false"
+      SPRING_DATASOURCE_DRUID_MASTER_URL: "jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-ry-vue}?allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=Asia/Shanghai"
+      SPRING_DATASOURCE_DRUID_MASTER_USERNAME: "${MYSQL_USER:-ruoyi}"
+      SPRING_DATASOURCE_DRUID_MASTER_PASSWORD: "${MYSQL_PASSWORD:-ruoyi-mysql-change-me}"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD:-ruoyi-redis-change-me}"
+      RUOYI_PROFILE: /app/data/uploadPath
+      TOKEN_SECRET: "${TOKEN_SECRET:-please-change-this-token-secret-before-production}"
+      LOGGING_LEVEL_COM_RUOYI: "${RUOYI_LOG_LEVEL:-info}"
+      JAVA_TOOL_OPTIONS: "-Xms${JAVA_XMS:-256m} -Xmx${JAVA_XMX:-512m} -Dfile.encoding=UTF-8 -Duser.timezone=${TZ:-Asia/Shanghai}"
+    volumes:
+      - backend_uploads:/app/data/uploadPath
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    networks:
+      - ruoyi-network
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: backend/docker/frontend.Dockerfile
+      args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org}"
+    image: "${FRONTEND_IMAGE:-ruoyi-frontend:local}"
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+    ports:
+      - "${APP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ruoyi-network
+
+volumes:
+  mysql_data:
+  redis_data:
+  backend_uploads:
+
+networks:
+  ruoyi-network:
+    driver: bridge
+

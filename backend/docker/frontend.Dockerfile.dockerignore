@@ -1,0 +1,9 @@
+**
+!frontend/
+!frontend/**
+!backend/
+!backend/docker/
+!backend/docker/nginx.conf
+frontend/node_modules/
+frontend/dist/
+
